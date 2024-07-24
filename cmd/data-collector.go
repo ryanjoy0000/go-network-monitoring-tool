@@ -25,7 +25,7 @@ func Start_data_collector() {
 
 	// kafka config
 	config := &kafka.ConfigMap{
-		"bootstrap.servers": "localhost:9092",
+		"bootstrap.servers": "localhost:9093",
 	}
 
 	// create Kafka producer
