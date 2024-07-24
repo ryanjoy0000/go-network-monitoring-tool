@@ -17,14 +17,18 @@ import (
 )
 
 const (
-	ENV = ".env"
+	ENV       = "../.env"
+	DELAY_SEC = 5
 )
 
 type NetworkMetrics struct {
-	Device    string  `json:"device"`
-	Timestamp int64   `json:"timestamp"`
-	Latency   float64 `json:"latency"`
-	Bandwidth float64 `json:"bandwidth"`
+	Device          string  `json:"device"`
+	Timestamp       int64   `json:"timestamp"`
+	Latency         float64 `json:"latency"`
+	BytesSent       int64   `json:"bytes_sent"`
+	BytesReceived   int64   `json:"bytes_received"`
+	PacketsSent     int64   `json:"packets_sent"`
+	PacketsReceived int64   `json:"packets_received"`
 }
 
 var (
@@ -78,12 +82,15 @@ func startDataCollection(producer sarama.AsyncProducer) {
 
 	canRun := true
 	for canRun {
+		// --------------------------------------------------------------------------------------
 		// get network I/O statistics for every network interface installed on the system
 		netStatList, err := net.IOCounters(false)
 		if err != nil {
 			log.Panicln("Error while collecting network metrics: ", err)
 			canRun = false
 		} else {
+			// log.Println("netStatList: ", netStatList)
+
 			// range through the net stats
 			for _, val := range netStatList {
 
@@ -92,11 +99,16 @@ func startDataCollection(producer sarama.AsyncProducer) {
 
 				// wait for latency result and define network metrics
 				metrics := NetworkMetrics{
-					Timestamp: time.Now().Unix(),
-					Device:    val.Name,
-					Latency:   <-latencyChan,
-					Bandwidth: float64(val.BytesRecv+val.BytesSent) / 1024, // KBps
+					Timestamp:       time.Now().Unix(),
+					Device:          val.Name,
+					Latency:         <-latencyChan,
+					BytesSent:       int64(val.BytesSent),
+					BytesReceived:   int64(val.BytesRecv),
+					PacketsSent:     int64(val.PacketsSent),
+					PacketsReceived: int64(val.PacketsRecv),
 				}
+
+				fmt.Println("Net stat val: ", val)
 
 				fmt.Println("metrics: ", metrics)
 
@@ -114,32 +126,30 @@ func startDataCollection(producer sarama.AsyncProducer) {
 
 			}
 		}
+
+		time.Sleep(DELAY_SEC * time.Second)
+		// --------------------------------------------------------------------------------------
 	}
 }
 
 func produceMsgKafka(msg *sarama.ProducerMessage, producer sarama.AsyncProducer) {
-	// Trap SIGINT to trigger a shutdown
+	// Trap SIGINT to trigger a graceful shutdown
 	signalChan := make(chan os.Signal, 1)
 	signal.Notify(signalChan, os.Interrupt)
 
-	var enqueuedCount, producerErrCount int
+	// --------------------------------------------------------------
+	select {
+	case producer.Input() <- msg:
+		log.Println("==== Sent above msg to kafka successfully ===== \n\n")
+		// handle errors
+	case err := <-producer.Errors():
+		log.Println("Could not produce msg to kafka: ", err)
 
-ProducerLoop:
-	for {
-		select {
-		case producer.Input() <- msg:
-			enqueuedCount++
-		case err := <-producer.Errors():
-			log.Println("Could not produce msg to kafka: ", err)
-			producerErrCount++
-		case <-signalChan:
-			log.Println("Interruption.. Producer exiting...")
-			break ProducerLoop
-		}
+		// Handle interruption and exit
+	case <-signalChan:
+		log.Println("Interruption.. Producer exiting...")
+		// break ProducerLoop
 	}
-
-	log.Println("Total msgs enqueued:", enqueuedCount)
-	log.Println("Total producer errors:", producerErrCount)
 }
 
 func createKafkaMessage(bSlice []byte) *sarama.ProducerMessage {
