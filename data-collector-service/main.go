@@ -12,12 +12,11 @@ import (
 	"time"
 
 	"github.com/IBM/sarama"
-	"github.com/joho/godotenv"
 	"github.com/shirou/gopsutil/v4/net"
 )
 
 const (
-	ENV       = "../.env"
+	ENV       = "./.env"
 	DELAY_SEC = 5
 )
 
@@ -38,9 +37,6 @@ var (
 )
 
 func main() {
-	// load .env file
-	loadEnv()
-
 	// fetch vars from .env
 	topic = os.Getenv("KAFKA_TOPIC")
 	addrs = []string{os.Getenv("KAFKA_HOST")}
@@ -60,13 +56,6 @@ func main() {
 
 	// start collection of network metrics
 	startDataCollection(producer)
-}
-
-func loadEnv() {
-	err := godotenv.Load(ENV)
-	if err != nil {
-		log.Fatalln("Error while reading .env file", err)
-	}
 }
 
 func handleProducerClose(p sarama.AsyncProducer) {

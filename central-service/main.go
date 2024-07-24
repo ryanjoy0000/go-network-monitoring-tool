@@ -6,7 +6,6 @@ import (
 	"os/signal"
 
 	"github.com/IBM/sarama"
-	"github.com/joho/godotenv"
 )
 
 const (
@@ -27,9 +26,6 @@ var (
 )
 
 func main() {
-	// load .env file
-	loadEnv()
-
 	// fetch vars from .env
 	topic = os.Getenv("KAFKA_TOPIC")
 	addrs = []string{os.Getenv("KAFKA_HOST")}
@@ -52,13 +48,6 @@ func main() {
 	defer handleConsumerClose(consumer)
 
 	startConsuming(partitionConsumer)
-}
-
-func loadEnv() {
-	err := godotenv.Load(ENV)
-	if err != nil {
-		log.Fatalln("Error while reading .env file", err)
-	}
 }
 
 func handleConsumerClose(c sarama.Consumer) {
