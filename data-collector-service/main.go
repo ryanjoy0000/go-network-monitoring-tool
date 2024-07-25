@@ -9,6 +9,7 @@ import (
 	"os/signal"
 	"regexp"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/IBM/sarama"
@@ -16,7 +17,6 @@ import (
 )
 
 const (
-	ENV       = "./.env"
 	DELAY_SEC = 5
 )
 
@@ -39,13 +39,32 @@ var (
 func main() {
 	// fetch vars from .env
 	topic = os.Getenv("KAFKA_TOPIC")
-	addrs = []string{os.Getenv("KAFKA_HOST")}
+	addrs_ENV := os.Getenv("KAFKA_HOST")
+	addrs = strings.Split(addrs_ENV, ",")
 	reliable_host = os.Getenv("RELIABLE_HOST")
 
 	log.Println(".env: \n", addrs, "\n", topic, "\n", reliable_host)
 
+	// create new topic with cluster admin
+	conf := sarama.NewConfig()
+	conf.Producer.Return.Successes = true
+	clusterAdmin, err := sarama.NewClusterAdmin(addrs, conf)
+	if err != nil {
+		log.Panicln("Error while creating cluster admin", err)
+	}
+	defer func() { clusterAdmin.Close() }()
+
+	// topicDetail := &sarama.TopicDetail{
+	// 	NumPartitions:     2,
+	// 	ReplicationFactor: 3,
+	// }
+	// err = clusterAdmin.CreateTopic(topic, topicDetail, false)
+	// if err != nil {
+	// 	log.Panicln("Error while creating topic", err)
+	// }
+
 	// create kafka producer
-	producer, err := sarama.NewAsyncProducer(addrs, nil)
+	producer, err := sarama.NewAsyncProducer(addrs, conf)
 	if err != nil {
 		log.Panicln("Error while creating producer", err)
 	}
@@ -160,24 +179,41 @@ func calcLatency(reliableHost string, latencyChan chan float64) {
 
 	// convert result to string
 	pingStr := string(pingResult)
+	var match []string
 
 	log.Println("pingStr: ", pingStr)
 
-	// Find the line with the average latency
-	r := regexp.MustCompile(`round-trip min/avg/max/stddev = [\d\.]+/([\d\.]+)/[\d\.]+/[\d\.]+ ms`)
-	log.Println("r:", r)
-	matches := r.FindStringSubmatch(pingStr)
-	log.Println("matches:", matches)
-	if len(matches) < 2 {
-		log.Panicln("Failed to parse ping output: ", pingStr)
-	}
+	regExp1 := `round-trip min/avg/max/stddev = [\d\.]+/([\d\.]+)/[\d\.]+/[\d\.]+ ms`
+	regExp2 := `round-trip min\/avg\/max = [\d\.]+\/([\d\.]+)\/[\d\.]+ ms`
 
-	// Convert the average latency to float64
-	avgLatency, err := strconv.ParseFloat(matches[1], 64)
-	if err != nil {
-		log.Panicln("Failed to convert latency to float: v", err)
+	if isMatching(regExp1, pingStr, match, latencyChan) ||
+		isMatching(regExp2, pingStr, match, latencyChan) {
+		log.Println("latency check done...")
+	} else {
+		// default value
+		log.Println("Failed to calculate latency, using default value 0")
+		latencyChan <- 0
 	}
-	log.Println("avgLatency", avgLatency)
+}
 
-	latencyChan <- avgLatency
+func isMatching(regExp, pingStr string, match []string, latencyChan chan float64) bool {
+	result := false
+	rExp := regexp.MustCompile(regExp)
+	log.Println("rExp:", rExp)
+	match = rExp.FindStringSubmatch(pingStr)
+	log.Println("match:", match)
+	if len(match) < 2 {
+		log.Println("Failed to parse ping output: ", pingStr)
+		result = false
+	} else {
+		result = true
+		// Convert the average latency to float64
+		avgLatency, err := strconv.ParseFloat(match[1], 64)
+		if err != nil {
+			log.Panicln("Failed to convert latency to float: v", err)
+		}
+		log.Println("avgLatency", avgLatency)
+		latencyChan <- avgLatency
+	}
+	return result
 }

@@ -4,6 +4,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 
 	"github.com/IBM/sarama"
 )
@@ -28,19 +29,20 @@ var (
 func main() {
 	// fetch vars from .env
 	topic = os.Getenv("KAFKA_TOPIC")
-	addrs = []string{os.Getenv("KAFKA_HOST")}
+	addrs_ENV := os.Getenv("KAFKA_HOST")
+	addrs = strings.Split(addrs_ENV, ",")
 
 	log.Println(".env: \n", addrs, "\n", topic)
 
 	// create kafka consumer
 	consumer, err := sarama.NewConsumer(addrs, nil)
 	if err != nil {
-		log.Panicln("Error while creating conusmer", err)
+		log.Panicln("Error while creating consumer", err)
 	}
 	// creata a PartitionConsumer
 	partitionConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetNewest)
 	if err != nil {
-		log.Panicln("Error while creating partition conusmer", err)
+		log.Panicln("Error while creating partition consumer", err)
 	}
 	log.Println("kafka consumer ready...")
 
