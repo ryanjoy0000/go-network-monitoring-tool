@@ -66,19 +66,26 @@ func startConsuming(c sarama.PartitionConsumer) {
 	signal.Notify(signalChan, os.Interrupt)
 
 	consumedCount := 0
+	shouldExit := make(chan bool)
 
-ConsumerLoop:
-	for {
-		select {
-		case msg := <-sarama.PartitionConsumer.Messages(c):
-			log.Println("============> received: ", string(msg.Value))
-			consumedCount++
+	go func() {
+		canRun := true
+		for canRun {
+			select {
+			case msg := <-sarama.PartitionConsumer.Messages(c):
+				log.Println("RECEIVED =====> ", string(msg.Value))
+				consumedCount++
 
-		// Handle interruption and exit
-		case <-signalChan:
-			log.Println("Interruption.. Consumer exiting...")
-			break ConsumerLoop
+			// Handle interruption and exit
+			case <-signalChan:
+				log.Println("Interruption.. Consumer exiting...")
+				canRun = false
+				shouldExit <- true
+			}
 		}
-	}
+	}()
+
+	<-shouldExit
+
 	log.Println("Total consumed msgs: ", consumedCount)
 }
