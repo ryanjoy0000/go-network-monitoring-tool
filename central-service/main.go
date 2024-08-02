@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/signal"
 	"strings"
+	"syscall"
 
 	"github.com/IBM/sarama"
 )
@@ -24,6 +25,7 @@ var (
 	topic         string
 	addrs         []string
 	reliable_host string
+	conf          *sarama.Config
 )
 
 func main() {
@@ -34,58 +36,88 @@ func main() {
 
 	log.Println(".env: \n", addrs, "\n", topic)
 
+	sarama.Logger = log.New(os.Stdout, "\t\t[sarama]", log.LstdFlags)
+
+	conf := sarama.NewConfig()
+	conf.Consumer.Return.Errors = true
+	conf.Consumer.Offsets.AutoCommit.Enable = true
+	conf.Consumer.Group.Rebalance.Strategy = sarama.NewBalanceStrategyRoundRobin()
+	conf.ClientID = "network-metrics"
+
+	partitionConsumer, consumer := createConsumer()
+
+	startConsuming(partitionConsumer, consumer)
+}
+
+func createConsumer() (sarama.PartitionConsumer, sarama.Consumer) {
 	// create kafka consumer
-	consumer, err := sarama.NewConsumer(addrs, nil)
+	consumer, err := sarama.NewConsumer(addrs, conf)
 	if err != nil {
 		log.Panicln("Error while creating consumer", err)
 	}
+	log.Println("master consumer created...")
+
 	// creata a PartitionConsumer
-	partitionConsumer, err := consumer.ConsumePartition(topic, 0, sarama.OffsetNewest)
+	partitionConsumer, err := consumer.ConsumePartition(
+		topic,
+		0,
+		sarama.OffsetNewest,
+	)
 	if err != nil {
 		log.Panicln("Error while creating partition consumer", err)
 	}
-	log.Println("kafka consumer ready...")
+	log.Println("partition consumer created...")
 
-	// close consumer properly in the end
-	defer handleConsumerClose(consumer)
-
-	startConsuming(partitionConsumer)
+	return partitionConsumer, consumer
 }
 
-func handleConsumerClose(c sarama.Consumer) {
+func handleConsumerClose(c sarama.PartitionConsumer, mainC sarama.Consumer) {
 	err := c.Close()
+	if err != nil {
+		log.Panicln("Error while closing the partitionConsumer", err)
+	}
+	log.Println("closing partitionConsumer....")
+
+	err = mainC.Close()
 	if err != nil {
 		log.Panicln("Error while closing the consumer", err)
 	}
 	log.Println("closing consumer....")
 }
 
-func startConsuming(c sarama.PartitionConsumer) {
+func startConsuming(c sarama.PartitionConsumer, mainC sarama.Consumer) {
 	// Trap SIGINT to trigger a graceful shutdown
 	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
+	signal.Notify(signalChan, os.Interrupt, syscall.SIGTERM)
 
 	consumedCount := 0
-	shouldExit := make(chan bool)
 
-	go func() {
-		canRun := true
-		for canRun {
-			select {
-			case msg := <-sarama.PartitionConsumer.Messages(c):
-				log.Println("RECEIVED =====> ", string(msg.Value))
-				consumedCount++
+	canRun := true
+	log.Println("ready to consume msgs...")
+	for canRun {
+		select {
+		case msg := <-c.Messages():
+			log.Println("-------------------------")
+			log.Println("RECEIVED =====> ", string(msg.Value))
+			log.Println("FROM => ", "Topic: ", msg.Topic, "| Partition:", msg.Partition, " | Offset:", msg.Offset)
+			consumedCount++
+			log.Println("Consumed msgs till now: ", consumedCount)
+			log.Println("-------------------------")
+
+		// handle error
+		case err := <-c.Errors():
+			log.Println("Error while consuming msg", err)
+			canRun = false
 
 			// Handle interruption and exit
-			case <-signalChan:
-				log.Println("Interruption.. Consumer exiting...")
-				canRun = false
-				shouldExit <- true
-			}
-		}
-	}()
+		case <-signalChan:
+			log.Println("Interruption.. Consumer exiting...")
 
-	<-shouldExit
+		}
+	}
 
 	log.Println("Total consumed msgs: ", consumedCount)
+
+	// close consumer properly in the end
+	defer handleConsumerClose(c, mainC)
 }

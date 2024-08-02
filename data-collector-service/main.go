@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
@@ -17,7 +16,7 @@ import (
 )
 
 const (
-	DELAY_SEC = 5
+	DELAY_SEC = 3
 )
 
 type NetworkMetrics struct {
@@ -53,15 +52,6 @@ func main() {
 		log.Panicln("Error while creating cluster admin", err)
 	}
 	defer func() { clusterAdmin.Close() }()
-
-	// topicDetail := &sarama.TopicDetail{
-	// 	NumPartitions:     2,
-	// 	ReplicationFactor: 3,
-	// }
-	// err = clusterAdmin.CreateTopic(topic, topicDetail, false)
-	// if err != nil {
-	// 	log.Panicln("Error while creating topic", err)
-	// }
 
 	// create kafka producer
 	producer, err := sarama.NewAsyncProducer(addrs, conf)
@@ -106,7 +96,7 @@ func startDataCollection(producer sarama.AsyncProducer) {
 				go calcLatency(reliable_host, latencyChan)
 
 				// wait for latency result and define network metrics
-				metrics := NetworkMetrics{
+				networkMetrics := NetworkMetrics{
 					Timestamp:       time.Now().Unix(),
 					Device:          val.Name,
 					Latency:         <-latencyChan,
@@ -118,19 +108,8 @@ func startDataCollection(producer sarama.AsyncProducer) {
 
 				fmt.Println("Net stat val: ", val)
 
-				fmt.Println("metrics: ", metrics)
-
-				// serialize metrics to byte slice
-				metricsBSlice, err := json.Marshal(metrics)
-				if err != nil {
-					log.Panic("Error while converting metrics to byte slice: ", err)
-				}
-
-				// kafka message
-				msg := createKafkaMessage(metricsBSlice)
-
 				// produce the msg to Kafka
-				produceMsgKafka(msg, producer)
+				produceMsgKafka(producer, networkMetrics)
 
 			}
 		}
@@ -140,23 +119,27 @@ func startDataCollection(producer sarama.AsyncProducer) {
 	}
 }
 
-func produceMsgKafka(msg *sarama.ProducerMessage, producer sarama.AsyncProducer) {
-	// Trap SIGINT to trigger a graceful shutdown
-	signalChan := make(chan os.Signal, 1)
-	signal.Notify(signalChan, os.Interrupt)
+func produceMsgKafka(producer sarama.AsyncProducer, networkMetrics NetworkMetrics) {
+	// serialize metrics to byte slice
+	metricsBSlice, err := json.Marshal(networkMetrics)
+	if err != nil {
+		log.Panic("Error while converting metrics to byte slice: ", err)
+	}
 
-	// --------------------------------------------------------------
+	// kafka message
+	msg := createKafkaMessage(metricsBSlice)
+
 	select {
+
 	case producer.Input() <- msg:
-		log.Println("==== Sent above msg to kafka successfully ===== \n\n")
+		log.Println("==== Sent msg to kafka successfully =====", networkMetrics)
+		log.Println("\n\n\n")
+		handleProducerClose(producer)
+
 		// handle errors
 	case err := <-producer.Errors():
-		log.Println("Could not produce msg to kafka: ", err)
+		log.Println("Error in producer: ", err)
 
-		// Handle interruption and exit
-	case <-signalChan:
-		log.Println("Interruption.. Producer exiting...")
-		// break ProducerLoop
 	}
 }
 
